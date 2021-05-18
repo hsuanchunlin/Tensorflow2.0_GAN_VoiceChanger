@@ -1,0 +1,145 @@
+import tensorflow.compat.v2 as tf
+#from tensorflow.python.framework.ops import disable_eager_execution
+#disable_eager_execution()
+# Import mlcompute module to use the optional set_mlc_device API for device selection with ML Compute.
+from tensorflow.python.compiler.mlcompute import mlcompute
+mlcompute.set_mlc_device(device_name='any') # Available options are 'cpu', 'gpu', and 'any'.
+
+
+import os
+import numpy as np
+import argparse
+import time
+import librosa
+from preprocess import *
+import soundfile as sf
+import model_tf2
+from CycleGAN_fit import *
+from tqdm import tqdm
+
+
+
+
+num_epochs = 50
+dataset_A = np.load('./data/preprocessed/George.npy')
+dataset_B = np.load('./data/preprocessed/Joanne.npy')
+
+def l1_loss(y, y_hat):
+
+    return tf.reduce_mean(tf.abs(y - y_hat))
+
+def l2_loss(y, y_hat):
+
+    return tf.reduce_mean(tf.square(y - y_hat))
+
+def cross_entropy_loss(logits, labels):
+    return tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits = logits, labels = labels))
+
+
+model = CycleGAN(num_features = 24)
+
+# Restore the weights
+#model.load_weights('./tf2/my_checkpoint')
+
+#Setting learning rate decay for better converge
+lr_schedule_gen = tf.keras.optimizers.schedules.PolynomialDecay(
+    initial_learning_rate=0.0002,
+    decay_steps = 20000,
+    end_learning_rate=1e-6,
+    power=1.0
+)
+lr_schedule_dis = tf.keras.optimizers.schedules.PolynomialDecay(
+    initial_learning_rate=0.01,
+    decay_steps = 20000,
+    end_learning_rate=1e-6,
+    power=1.0
+)
+lr_exponential_gen = tf.keras.optimizers.schedules.ExponentialDecay(
+    initial_learning_rate = 0.0002,
+    decay_steps = 10000,
+    decay_rate = 0.96,
+    staircase=False,
+    name=None
+)
+lr_exponential_dis = tf.keras.optimizers.schedules.ExponentialDecay(
+    initial_learning_rate = 0.0001,
+    decay_steps = 10000,
+    decay_rate = 0.96,
+    staircase=False,
+    name=None
+)
+
+# Compile the model
+model.compile(
+    generation_A2B_optimizer=tf.keras.optimizers.Adam(learning_rate=lr_exponential_gen, beta_1=0.5),
+    generation_B2A_optimizer=tf.keras.optimizers.Adam(learning_rate=lr_exponential_gen, beta_1=0.5),
+    discrimination_A_optimizer=tf.keras.optimizers.Adam(learning_rate=lr_exponential_dis, beta_1=0.5),
+    discrimination_B_optimizer=tf.keras.optimizers.Adam(learning_rate=lr_exponential_dis, beta_1=0.5),
+    #generator_optimizer = tf.keras.optimizers.Adam(learning_rate=lr_exponential_gen, beta_1=0.5),
+    #discriminator_optimizer = tf.keras.optimizers.Adam(learning_rate=lr_exponential_dis, beta_1=0.5),
+    gen_loss_fn=l2_loss,
+    disc_loss_fn=l2_loss,
+)
+#Training
+    #"G_loss": total_loss_A2B,
+    #"F_loss": total_loss_B2A,
+    #"D_X_loss": disc_A_loss,
+    #"D_Y_loss": disc_B_loss,
+
+# For non-eager excution
+#sess = tf.compat.v1.Session()
+g_loss = []
+d_loss = []
+iter = []
+r = 0
+
+# For validation
+data = np.load('model_base/logf0s_normalization.npz')
+data2 = np.load('model_base/mcep_normalization.npz')
+log_f0s_mean_A = data['mean_A']
+log_f0s_mean_B = data['mean_B']
+log_f0s_std_A = data['std_A']
+log_f0s_std_B = data['std_B']
+coded_sps_A_mean = data2['mean_A']
+coded_sps_B_mean = data2['mean_B']
+coded_sps_A_std = data2['std_A']
+coded_sps_B_std = data2['std_B']
+sampling_rate = 16000
+num_mcep = 24
+frame_period = 5.0
+n_frames = 128
+sr = sampling_rate
+
+def generate_validation(epoch):
+    # Generate files for validation
+    print('Starting evaluation step..........')
+    wav, _ = librosa.load('data/validation/JK.wav', sr = sampling_rate, mono = True)
+    wav = wav_padding(wav = wav, sr = sampling_rate, frame_period = frame_period, multiple = 4)
+    f0, timeaxis, sp, ap = world_decompose(wav = wav, fs = sampling_rate, frame_period = frame_period)
+    f0_converted = pitch_conversion(f0 = f0, mean_log_src = log_f0s_mean_A, std_log_src = log_f0s_std_A, mean_log_target = log_f0s_mean_B, std_log_target = log_f0s_std_B)
+    coded_sp = world_encode_spectral_envelop(sp = sp, fs = sampling_rate, dim = num_mcep)
+    coded_sp_transposed = coded_sp.T
+    coded_sp_norm = (coded_sp_transposed - coded_sps_A_mean) / coded_sps_A_std
+    coded_sp_converted_norm = model.generation_A2B(tf.expand_dims(coded_sp_norm,0))
+    coded_sp_converted_norm = tf.squeeze(coded_sp_converted_norm)
+    coded_sp_converted = coded_sp_converted_norm * coded_sps_B_std + coded_sps_B_mean
+    coded_sp_converted = tf.transpose(coded_sp_converted)
+    coded_sp_converted = np.ascontiguousarray(coded_sp_converted)
+    coded_sp_converted = coded_sp_converted.astype('double')
+    decoded_sp_converted = world_decode_spectral_envelop(coded_sp = coded_sp_converted, fs = sampling_rate)
+    wav_transformed = world_speech_synthesis(f0 = f0_converted, decoded_sp = decoded_sp_converted, ap = ap, fs = sampling_rate, frame_period = frame_period)
+    file_path = ('data/output/tf2' + str(epoch) + '.wav')
+    sf.write(file_path, wav_transformed, sampling_rate)
+dataA = tf.data.Dataset.from_tensor_slices(dataset_A)
+dataB = tf.data.Dataset.from_tensor_slices(dataset_B)
+
+# Create a callback that saves the model's weights
+cp_callback = tf.keras.callbacks.ModelCheckpoint(filepath='./tf2/my_checkpoint',
+                                                 save_weights_only=True,
+                                                 verbose=1)
+model.load_weights('./tf2/my_checkpoint')
+model.fit(tf.data.Dataset.zip((dataA, dataB)),
+    callbacks=[cp_callback],
+    epochs = 50)
+print('Saving weights and check points')
+model.save_weights('./tf2/my_checkpoint')
