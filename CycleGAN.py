@@ -1,7 +1,7 @@
 import os
 #import tensorflow as tf
 import tensorflow.compat.v2 as tf
-from model import *
+from model_tf2 import *
 #from model_tf2 import discriminator, generator_gatecnn
 #from utils import l1_loss, l2_loss, cross_entropy_loss
 from datetime import datetime
@@ -15,7 +15,7 @@ def l1_loss(y, y_hat):
 class CycleGAN(tf.keras.Model):
     def __init__(self, num_features=24,
                  lambda_cycle=10.0,
-                 lambda_identity=5):
+                 lambda_identity=5.0):
         super(CycleGAN, self).__init__()
 
         self.generation_A2B = generator_gatecnn()
@@ -49,6 +49,10 @@ class CycleGAN(tf.keras.Model):
         self.discriminator_loss_fn = disc_loss_fn
         self.cycle_loss_fn = tf.keras.losses.MeanAbsoluteError()
         self.identity_loss_fn = tf.keras.losses.MeanAbsoluteError()
+
+    def save_model(self, filepath):
+        tf.keras.models.save_model(self.generation_A2B, filepath+'_AB')
+        tf.keras.models.save_model(self.generation_B2A, filepath+'_BA')
 
     #By adding tf.function, we can optimized the efficiency of training
     #@tf.function
@@ -115,8 +119,8 @@ class CycleGAN(tf.keras.Model):
             identity_loss = id_loss_A2B + id_loss_B2A
 
             # Total generator loss
-            #total_loss_A2B = gen_A2B_loss + cycle_loss_A2B + id_loss_A2B
-            #total_loss_B2A = gen_B2A_loss + cycle_loss_B2A + id_loss_B2A
+            total_loss_A2B = gen_A2B_loss + self.lambda_cycle * cycle_loss_A2B + self.lambda_identity * id_loss_A2B
+            total_loss_B2A = gen_B2A_loss + self.lambda_cycle * cycle_loss_B2A + self.lambda_identity * id_loss_B2A
             generator_loss = gen_A2B_loss + gen_B2A_loss + self.lambda_cycle * cycle_loss + self.lambda_identity * identity_loss
 
             # Discriminator loss
@@ -130,7 +134,7 @@ class CycleGAN(tf.keras.Model):
             disc_B_fake_loss = self.discriminator_loss_fn(tf.zeros_like(disc_fake_B), disc_fake_B)
             discriminator_loss_B = (disc_B_real_loss + disc_B_fake_loss)/2
 
-            discriminator_loss = discriminator_loss_A + discriminator_loss_B
+            #discriminator_loss = discriminator_loss_A + discriminator_loss_B
 
         # trainable variable
         #gen_train_var = [v for v in self.generation_A2B.trainable_variables] + [q for q in self.generation_B2A.trainable_variables]
@@ -141,8 +145,8 @@ class CycleGAN(tf.keras.Model):
 
         #grads_gen = tape.gradient(generator_loss, gen_train_var)
         # Get the gradients for the discriminators
-        disc_A_grads = tape.gradient(discriminator_loss, self.discrimination_A.trainable_variables)
-        disc_B_grads = tape.gradient(discriminator_loss, self.discrimination_B.trainable_variables)
+        disc_A_grads = tape.gradient(discriminator_loss_A, self.discrimination_A.trainable_variables)
+        disc_B_grads = tape.gradient(discriminator_loss_B, self.discrimination_B.trainable_variables)
         #disc_grads = tape.gradient(discriminator_loss, dis_train_var)
         # Update the weights of the generators
         self.generation_A2B_optimizer.apply_gradients(
@@ -166,10 +170,8 @@ class CycleGAN(tf.keras.Model):
         #    zip(disc_grads, dis_train_var)
         #)
         return {
-            #"G_loss": total_loss_A2B,
-            "G_loss": generator_loss,
-            #"F_loss": total_loss_B2A,
-            #"D_X_loss": disc_A_loss,
-            #"D_Y_loss": disc_B_loss,
-            "D_loss": discriminator_loss
+            "G_loss": total_loss_A2B,
+            "F_loss": total_loss_B2A,
+            "D_X_loss": discriminator_loss_A,
+            "D_Y_loss": discriminator_loss_B,
         }
