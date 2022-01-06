@@ -1,12 +1,4 @@
-import tensorflow.compat.v2 as tf
-tf.enable_v2_behavior()
-#from tensorflow.python.framework.ops import disable_eager_execution
-#disable_eager_execution()
-# Import mlcompute module to use the optional set_mlc_device API for device selection with ML Compute.
-from tensorflow.python.compiler.mlcompute import mlcompute
-mlcompute.set_mlc_device(device_name='any') # Available options are 'cpu', 'gpu', and 'any'.
-
-
+import tensorflow as tf
 import os
 import numpy as np
 import argparse
@@ -14,8 +6,8 @@ import time
 import librosa
 from preprocess import *
 import soundfile as sf
-import model_tf2
-from CycleGAN_fit import *
+import model
+from CycleGAN import *
 from tqdm import tqdm
 import datetime
 

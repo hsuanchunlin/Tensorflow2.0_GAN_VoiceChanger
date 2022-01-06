@@ -1,9 +1,6 @@
 import os
-#import tensorflow as tf
-import tensorflow.compat.v2 as tf
-from model_tf2 import *
-#from model_tf2 import discriminator, generator_gatecnn
-#from utils import l1_loss, l2_loss, cross_entropy_loss
+import tensorflow as tf
+from model import *
 from datetime import datetime
 
 def l1_loss(y, y_hat):

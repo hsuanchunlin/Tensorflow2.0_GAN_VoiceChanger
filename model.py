@@ -1,5 +1,4 @@
-#import tensorflow as tf
-import tensorflow.compat.v2 as tf
+import tensorflow as tf
 
 #Basic block for 1D
 class BasicBlock_1D(tf.keras.layers.Layer):
